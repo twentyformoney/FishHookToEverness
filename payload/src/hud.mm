@@ -9,8 +9,9 @@
 #include "imgui_impl_metal.h"
 #include "imgui_impl_osx.h"
 
-static dispatch_once_t g_imgui_once;
 static os_unfair_lock g_imgui_lock = OS_UNFAIR_LOCK_INIT;
+static os_unfair_lock g_setup_lock = OS_UNFAIR_LOCK_INIT;
+static bool g_setup_done = false;
 
 static NSView* njyn_find_host_view(CAMetalLayer* layer) {
     if ([layer.delegate isKindOfClass:[NSView class]]) return (NSView*)layer.delegate;
@@ -19,29 +20,47 @@ static NSView* njyn_find_host_view(CAMetalLayer* layer) {
 }
 
 void njyn_imgui_setup(CAMetalLayer* layer) {
-    dispatch_once(&g_imgui_once, ^{
-        void (^setup)(void) = ^{
-            g_device = layer.device;
-            NSView* view = njyn_find_host_view(layer);
-            g_host_view = view;
+    if (g_setup_done) return;
+    if (!os_unfair_lock_trylock(&g_setup_lock)) return;
+    if (g_setup_done) { os_unfair_lock_unlock(&g_setup_lock); return; }
 
-            IMGUI_CHECKVERSION();
-            ImGui::CreateContext();
-            ImGuiIO& io = ImGui::GetIO();
-            io.IniFilename = nullptr;
-            io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-            ImGui::StyleColorsDark();
+    void (^setup)(void) = ^{
+        id<MTLDevice> dev = layer.device;
+        NSView* view = njyn_find_host_view(layer);
+        if (!view || !dev) return;
 
-            ImGui_ImplMetal_Init(g_device);
-            if (view) ImGui_ImplOSX_Init(view);
+        g_device = dev;
+        g_host_view = view;
 
-            g_imgui_ready = (view != nil && g_device != nil);
-            nijuyon_log("[nijuyon] ImGui ready (device=%p view=%p)\n",
-                        (__bridge void*)g_device, (__bridge void*)view);
-        };
-        if (NSThread.isMainThread) setup();
-        else dispatch_sync(dispatch_get_main_queue(), setup);
-    });
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        ImGui::StyleColorsDark();
+
+        ImGui_ImplMetal_Init(g_device);
+        ImGui_ImplOSX_Init(view);
+
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                              handler:^NSEvent*(NSEvent* ev) {
+            if ((ev.modifierFlags & NSEventModifierFlagControl) && ev.keyCode == 18 /* kVK_ANSI_1 */) {
+                g_show_hud = !g_show_hud;
+                nijuyon_log("[nijuyon] HUD -> %s", g_show_hud ? "shown" : "hidden");
+                return nil;
+            }
+            return ev;
+        }];
+
+        g_imgui_ready = true;
+        g_setup_done = true;
+        nijuyon_log("[nijuyon] ImGui ready (device=%p view=%p)\n",
+                    (__bridge void*)g_device, (__bridge void*)view);
+    };
+    if (NSThread.isMainThread) setup();
+    else dispatch_sync(dispatch_get_main_queue(), setup);
+
+    os_unfair_lock_unlock(&g_setup_lock);
 }
 
 void njyn_draw_imgui(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable) {
@@ -63,6 +82,8 @@ void njyn_draw_imgui(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable) {
         ImGui_ImplMetal_NewFrame(rpd);
         ImGui_ImplOSX_NewFrame(view);
         ImGui::NewFrame();
+
+        if (g_show_hud) {
 
         ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(440, 520), ImGuiCond_FirstUseEver);
@@ -175,6 +196,8 @@ void njyn_draw_imgui(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable) {
         ImGui::End();
 
         if (g_show_demo) ImGui::ShowDemoWindow(&g_show_demo);
+
+        } // g_show_hud
 
         ImGui::Render();
         ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cb, enc);

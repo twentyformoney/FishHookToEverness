@@ -6,6 +6,7 @@ __weak id<MTLCommandQueue> g_host_queue = nil;
 __weak NSView* g_host_view = nil;
 
 bool g_imgui_ready = false;
+bool g_show_hud = true;
 bool g_show_demo = false;
 bool g_enable_capture_log = false;
 

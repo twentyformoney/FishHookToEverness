@@ -17,6 +17,7 @@ extern __weak id<MTLCommandQueue> g_host_queue;
 extern __weak NSView* g_host_view;
 
 extern bool g_imgui_ready;
+extern bool g_show_hud;
 extern bool g_show_demo;
 extern bool g_enable_capture_log;
 
